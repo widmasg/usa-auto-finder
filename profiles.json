@@ -1,0 +1,18 @@
+{
+  "profiles": [
+    {
+      "name": "USA Auto Finder",
+      "settings": {
+        "brands": [],
+        "year": 2015,
+        "yearMax": 2026,
+        "priceMin": 0,
+        "price": 15000,
+        "milesMin": 0,
+        "miles": 150000,
+        "auction": "",
+        "cylFilter": ""
+      }
+    }
+  ]
+}
