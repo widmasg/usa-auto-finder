@@ -7,10 +7,10 @@ on:
     - cron: '0 8 * * *'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: usa-auto-finder
+  group: palmimport-state
   cancel-in-progress: false
 
 jobs:
@@ -18,25 +18,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout program
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout saved state
+        uses: actions/checkout@v4
+        with:
+          ref: palmimport-state
+          path: saved-state
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Restore seen cars
-        uses: actions/cache/restore@v4
-        with:
-          path: seen.json
-          key: seen-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            seen-
-
-      - name: Initialize state
+      - name: Restore state files
         run: |
-          if [ ! -f seen.json ]; then
+          test -f saved-state/quota.json
+          cp saved-state/quota.json quota.json
+
+          if [ -f saved-state/seen.json ]; then
+            cp saved-state/seen.json seen.json
+          else
             echo '[]' > seen.json
           fi
 
@@ -48,9 +54,23 @@ jobs:
           AUCTION_API_KEY: ${{ secrets.AUCTION_API_KEY }}
         run: python check.py
 
-      - name: Save seen cars
+      - name: Save state
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: seen.json
-          key: seen-${{ github.run_id }}-${{ github.run_attempt }}
+        working-directory: saved-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp ../quota.json quota.json
+          cp ../seen.json seen.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add quota.json seen.json
+
+          if git diff --cached --quiet; then
+            echo "No state changes"
+          else
+            git commit -m "Update PalmImport state"
+            git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push origin HEAD:palmimport-state
+          fi
