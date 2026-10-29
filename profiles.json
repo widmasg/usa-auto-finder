@@ -1,9 +1,21 @@
+
 {
   "profiles": [
     {
       "name": "USA Auto Finder",
       "settings": {
-        "brands": [],
+        "brands": [
+          "Ford",
+          "Audi",
+          "BMW",
+          "Jeep",
+          "Dodge",
+          "Chevrolet",
+          "Tesla"
+        ],
+        "modelByMake": {
+          "Chevrolet": "Corvette"
+        },
         "year": 2015,
         "yearMax": 2026,
         "priceMin": 0,
@@ -11,7 +23,10 @@
         "milesMin": 0,
         "miles": 150000,
         "auction": "",
-        "cylFilter": ""
+        "cylFilter": "",
+        "requireRunDrive": true,
+        "requireKeys": true,
+        "requireAirbags": false
       }
     }
   ]
