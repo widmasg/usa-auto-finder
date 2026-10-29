@@ -15,35 +15,44 @@ STATE = ROOT / "seen.json"
 QUOTA = ROOT / "quota.json"
 
 BASE = os.environ["AUCTION_FEED_URL"].strip()
-if BASE != "https://apibara.tech/api/v1/vehicle-auction/vehicles":
-    raise ValueError("Incorrect API endpoint")
+EXPECTED = "https://apibara.tech/api/v1/vehicle-auction/vehicles"
+
+if BASE != EXPECTED:
+    raise ValueError("Incorrect Apibara API endpoint")
 
 TODAY = dt.datetime.now(dt.timezone.utc).date()
 MONTH = TODAY.strftime("%Y-%m")
 
+# Total monthly usage, including previous tests.
+MONTHLY_LIMIT = 90
+DAILY_LIMIT = 3
 
-def load_json(path, default):
+
+def load_json(path):
     if not path.exists():
-        return default
+        raise RuntimeError(f"Missing state file: {path.name}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def save_json(path, data):
     path.write_text(
-        json.dumps(data, indent=2),
+        json.dumps(data, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
 
 
-seen = set(load_json(STATE, []))
-quota = load_json(QUOTA, {
-    "month": MONTH,
-    "used": 0,
-    "last_run": ""
-})
+seen = set(load_json(STATE))
+quota = load_json(QUOTA)
 
 if quota.get("month") != MONTH:
-    quota = {"month": MONTH, "used": 0, "last_run": ""}
+    # Do not silently reset usage.
+    raise RuntimeError(
+        "Quota month differs. Verify Apibara usage "
+        "and update quota.json before continuing."
+    )
+
+if not isinstance(quota.get("used"), int):
+    raise RuntimeError("Invalid quota counter")
 
 
 def numeric(value):
@@ -54,19 +63,28 @@ def numeric(value):
 
 
 def in_range(value, minimum, maximum):
-    value = numeric(value)
+    number = numeric(value)
     return (
-        value is not None
-        and (minimum is None or value >= float(minimum))
-        and (maximum is None or value <= float(maximum))
+        number is not None
+        and (minimum is None or number >= float(minimum))
+        and (maximum is None or number <= float(maximum))
     )
 
 
-def eligible(car, settings):
+def eligible(car, settings, expected_make, expected_model):
     condition = car.get("condition") or {}
     odometer = car.get("odometer") or {}
     pricing = car.get("pricing") or {}
     specs = car.get("vehicle_specs") or {}
+
+    if str(car.get("make", "")).lower() != expected_make.lower():
+        return False
+
+    if expected_model:
+        if expected_model.lower() not in str(
+            car.get("model", "")
+        ).lower():
+            return False
 
     run = str(
         condition.get("run_condition")
@@ -109,23 +127,26 @@ def eligible(car, settings):
 
     cylinders = settings.get("cylFilter")
     if cylinders:
-        if str(specs.get("cylinders", "")).lower() != str(cylinders).lower():
+        if str(specs.get("cylinders", "")).lower() != str(
+            cylinders
+        ).lower():
             return False
 
     return True
 
 
 def notify(message):
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
     payload = urllib.parse.urlencode({
         "chat_id": os.environ["TELEGRAM_CHAT_ID"],
         "text": message,
         "disable_web_page_preview": "true"
     }).encode()
 
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-
-    request = urllib.request.Request(url, data=payload)
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=payload
+    )
 
     with urllib.request.urlopen(request, timeout=30) as response:
         result = json.load(response)
@@ -134,7 +155,7 @@ def notify(message):
         raise RuntimeError("Telegram message rejected")
 
 
-def api_search(make, platform, model=None):
+def api_search(make, platform, model):
     params = {
         "platform": platform,
         "make": make,
@@ -157,17 +178,48 @@ def api_search(make, platform, model=None):
         }
     )
 
-    # Count before requesting, including failed requests.
+    # Record attempted requests, including HTTP errors.
     quota["used"] += 1
     save_json(QUOTA, quota)
 
     with urllib.request.urlopen(request, timeout=35) as response:
         result = json.load(response)
 
-    if not isinstance(result, dict) or not isinstance(result.get("data"), list):
-        raise RuntimeError("Unexpected API response")
+    if (
+        not isinstance(result, dict)
+        or result.get("ok") is False
+        or not isinstance(result.get("data"), list)
+    ):
+        raise RuntimeError("Unexpected Apibara response")
 
     return result["data"]
+
+
+def build_searches():
+    searches = []
+
+    for profile in PROFILES:
+        settings = profile.get("settings", profile)
+        brands = settings.get("brands", [])
+        models = settings.get("modelByMake", {})
+
+        for make in brands:
+            configured = models.get(make)
+
+            if isinstance(configured, list):
+                model_list = configured or [None]
+            else:
+                model_list = [configured]
+
+            for model in model_list:
+                for platform in ("copart", "iaai"):
+                    searches.append((
+                        make, platform, model,
+                        profile.get("name", "PalmImport"),
+                        settings
+                    ))
+
+    return searches
 
 
 def main():
@@ -175,43 +227,42 @@ def main():
         print("Already checked today")
         return
 
-    if quota["used"] >= 90:
+    if quota["used"] >= MONTHLY_LIMIT:
         print("Monthly safety limit reached")
         return
 
-    searches = []
-
-    for profile in PROFILES:
-        settings = profile.get("settings", profile)
-        for make in settings.get("brands", []):
-            model = settings.get("modelByMake", {}).get(make)
-            for platform in ("copart", "iaai"):
-                searches.append(
-                    (make, platform, model, profile["name"], settings)
-                )
-
-    # Rotate across all configured searches.
-    offset = TODAY.toordinal() * 3
-    total = len(searches)
-
-    if not total:
+    searches = build_searches()
+    if not searches:
         print("No searches configured")
         return
 
-    selected = [
-        searches[(offset + i) % total]
-        for i in range(min(3, total, 90 - quota["used"]))
-    ]
+    # Advance by the number of searches completed
+    # on previous days, rather than calendar day * 3.
+    cursor = int(quota.get("cursor", 0))
+    count = min(
+        DAILY_LIMIT,
+        len(searches),
+        MONTHLY_LIMIT - quota["used"]
+    )
 
     checked = 0
     sent = 0
 
-    for make, platform, model, profile_name, settings in selected:
+    for i in range(count):
+        make, platform, model, profile_name, settings = (
+            searches[(cursor + i) % len(searches)]
+        )
+
+        # Advance before the request, so failed
+        # searches are not repeated indefinitely.
+        quota["cursor"] = cursor + i + 1
+        save_json(QUOTA, quota)
+
         cars = api_search(make, platform, model)
         checked += len(cars)
 
         for car in cars:
-            if not eligible(car, settings):
+            if not eligible(car, settings, make, model):
                 continue
 
             identifier = car.get("lot_number") or car.get("vin")
@@ -219,13 +270,13 @@ def main():
                 continue
 
             key = f"{platform}:{identifier}"
-
             if key in seen:
                 continue
 
-            price = (car.get("pricing") or {}).get("buy_now_usd")
+            pricing = car.get("pricing") or {}
+            price = pricing.get("buy_now_usd")
             if price is None:
-                price = (car.get("pricing") or {}).get("current_bid_usd")
+                price = pricing.get("current_bid_usd")
 
             url = car.get("url") or car.get("auction_url") or ""
             if not str(url).startswith("https://"):
@@ -250,7 +301,7 @@ def main():
     save_json(QUOTA, quota)
 
     print(f"Patikrinta: {checked}. Išsiųsta: {sent}.")
-    print(f"API užklausų šį mėnesį: {quota['used']}/90")
+    print(f"Apibara užklausų: {quota['used']}/{MONTHLY_LIMIT}")
 
 
 if __name__ == "__main__":
