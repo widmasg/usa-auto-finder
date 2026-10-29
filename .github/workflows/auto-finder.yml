@@ -1,4 +1,4 @@
-# USA Auto Finder automation
+
 name: USA Auto Finder
 
 on:
@@ -6,9 +6,17 @@ on:
   schedule:
     - cron: '0 8 * * *'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: usa-auto-finder
+  cancel-in-progress: false
+
 jobs:
   search:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,6 +26,20 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Restore seen cars
+        uses: actions/cache/restore@v4
+        with:
+          path: seen.json
+          key: seen-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            seen-
+
+      - name: Initialize state
+        run: |
+          if [ ! -f seen.json ]; then
+            echo '[]' > seen.json
+          fi
+
       - name: Run USA Auto Finder
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -25,3 +47,10 @@ jobs:
           AUCTION_FEED_URL: ${{ secrets.AUCTION_FEED_URL }}
           AUCTION_API_KEY: ${{ secrets.AUCTION_API_KEY }}
         run: python check.py
+
+      - name: Save seen cars
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen.json
+          key: seen-${{ github.run_id }}-${{ github.run_attempt }}
