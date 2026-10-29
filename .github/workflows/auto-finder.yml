@@ -1,0 +1,27 @@
+
+name: USA Auto Finder
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run USA Auto Finder
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          AUCTION_FEED_URL: ${{ secrets.AUCTION_FEED_URL }}
+          AUCTION_API_KEY: ${{ secrets.AUCTION_API_KEY }}
+        run: python check.py
