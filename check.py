@@ -1,107 +1,123 @@
+import datetime as dt
 import json
 import os
 import pathlib
+import urllib.error
 import urllib.parse
 import urllib.request
 
 ROOT = pathlib.Path(__file__).parent
 PROFILES = json.loads((ROOT / 'profiles.json').read_text(encoding='utf-8'))['profiles']
 STATE = ROOT / 'seen.json'
-seen = set(json.loads(STATE.read_text(encoding='utf-8')) if STATE.exists() else [])
+SEEN = set(json.loads(STATE.read_text(encoding='utf-8'))) if STATE.exists() else set()
+BASE = os.environ['AUCTION_FEED_URL'].strip()
+if BASE != 'https://apibara.tech/api/v1/vehicle-auction/vehicles':
+    raise ValueError('AUCTION_FEED_URL must be the Apibara vehicles endpoint')
 
 
-def fetch():
-    url = os.environ['AUCTION_FEED_URL']
-    if not url.startswith('https://'):
-        raise ValueError('Feed URL must use HTTPS')
-    req = urllib.request.Request(url, headers={
-        'Authorization': 'Bearer ' + os.getenv('AUCTION_API_KEY', ''),
-        'Accept': 'application/json',
-    })
-    with urllib.request.urlopen(req, timeout=35) as response:
-        data = json.load(response)
-    if isinstance(data, dict):
-        data = data.get('cars', data.get('items', []))
-    if not isinstance(data, list):
-        raise ValueError('Expected JSON list or {cars: [...]}')
-    return data
+def api_search(make, platform, model=None):
+    params = {'platform': platform, 'make': make, 'per_page': 20,
+              'run_cond': 'RUNS AND DRIVES', 'has_key': 'With', 'upcoming': 'only'}
+    if model:
+        params['model'] = model
+    url = BASE + '?' + urllib.parse.urlencode(params)
+    request = urllib.request.Request(url, headers={
+        'X-API-Key': os.environ['AUCTION_API_KEY'],
+        'Accept': 'application/json'})
+    try:
+        with urllib.request.urlopen(request, timeout=35) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f'Apibara HTTP {exc.code}; check API plan, key and filters') from exc
+    if not isinstance(result, dict) or result.get('ok') is False or not isinstance(result.get('data'), list):
+        raise RuntimeError('Unexpected Apibara response; expected data array')
+    return result['data']
 
 
-def yes(value):
-    return str(value).strip().lower() in ('yes', 'true', '1')
+def numeric(value):
+    try:
+        return float(value) if value is not None else None
+    except (ValueError, TypeError):
+        return None
 
 
-def match(car, settings):
-    if not (yes(car.get('runDrive')) and yes(car.get('keys')) and
-            str(car.get('airbags', '')).lower() == 'not_deployed'):
+def in_range(value, minimum, maximum):
+    number = numeric(value)
+    return number is not None and (minimum is None or number >= float(minimum)) and (maximum is None or number <= float(maximum))
+
+
+def eligible(car, settings):
+    condition = car.get('condition') or {}
+    odometer = car.get('odometer') or {}
+    pricing = car.get('pricing') or {}
+    specs = car.get('vehicle_specs') or {}
+    run = str(condition.get('run_condition') or condition.get('run_cond') or '').upper()
+    if settings.get('requireRunDrive', True) and run != 'RUNS AND DRIVES':
         return False
-    if settings.get('brands') and str(car.get('make', '')).lower() not in [str(x).lower() for x in settings['brands']]:
+    if settings.get('requireKeys', True) and condition.get('has_key') is not True:
         return False
-    if settings.get('singleMake') and str(car.get('make', '')).lower() != str(settings['singleMake']).lower():
+    if not in_range(car.get('year'), settings.get('year'), settings.get('yearMax')):
         return False
-    if settings.get('modelFilter') and str(settings['modelFilter']).lower() not in str(car.get('model', '')).lower():
+    if not in_range(odometer.get('mi'), settings.get('milesMin'), settings.get('miles')):
         return False
-    if settings.get('auction') and str(settings['auction']).lower() != str(car.get('auction', '')).lower():
+    price = pricing.get('buy_now_usd')
+    if price is None:
+        price = pricing.get('current_bid_usd')
+    if not in_range(price, settings.get('priceMin'), settings.get('price')):
         return False
-    for field, low, high in [('year', 'year', 'yearMax'), ('price', 'priceMin', 'price'), ('miles', 'milesMin', 'miles')]:
-        if settings.get(low) is not None or settings.get(high) is not None:
-            try:
-                value = float(car[field])
-            except (KeyError, ValueError, TypeError):
-                return False
-            if settings.get(low) is not None and value < float(settings[low]):
-                return False
-            if settings.get(high) is not None and value > float(settings[high]):
-                return False
-    if settings.get('cylFilter'):
-        try:
-            if int(car['cylinders']) != int(settings['cylFilter']):
-                return False
-        except (KeyError, TypeError, ValueError):
-            return False
+    cyl = settings.get('cylFilter')
+    if cyl and str(specs.get('cylinders', '')).lower() != str(cyl).lower():
+        return False
+    if car.get('make', '').lower() == 'chevrolet' and 'corvette' not in str(car.get('model', '')).lower():
+        return False
     return True
 
 
 def notify(message):
     token = os.environ['TELEGRAM_BOT_TOKEN']
-    chat = os.environ['TELEGRAM_CHAT_ID']
-    payload = urllib.parse.urlencode({
-        'chat_id': chat,
-        'text': message,
-        'disable_web_page_preview': 'true',
-    }).encode()
-    req = urllib.request.Request('https://api.telegram.org/bot' + token + '/sendMessage', data=payload)
-    with urllib.request.urlopen(req, timeout=30) as response:
-        result = json.load(response)
-        if not result.get('ok'):
-            raise RuntimeError('Telegram send failed')
+    payload = urllib.parse.urlencode({'chat_id': os.environ['TELEGRAM_CHAT_ID'],
+                                      'text': message, 'disable_web_page_preview': 'true'}).encode()
+    request = urllib.request.Request('https://api.telegram.org/bot' + token + '/sendMessage', data=payload)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        if not json.load(response).get('ok'):
+            raise RuntimeError('Telegram rejected message')
 
 
 def main():
-    cars = fetch()
-    pending = set()
-    new = []
-    for profile in PROFILES:
-        settings = profile.get('settings', profile)
+    # Two requests/day: 60-62 per month; rotate through seven brands.
+    # A single page per platform is a SAMPLE, not a complete inventory scan.
+    brands = ['Ford', 'Audi', 'BMW', 'Jeep', 'Dodge', 'Chevrolet', 'Tesla']
+    make = brands[dt.date.today().toordinal() % len(brands)]
+    settings = PROFILES[0].get('settings', PROFILES[0])
+    model = 'Corvette' if make == 'Chevrolet' else None
+    checked = sent = 0
+    for platform in ('copart', 'iaai'):
+        cars = api_search(make, platform, model)
+        checked += len(cars)
         for car in cars:
-            key = str(car.get('auction', '')) + ':' + str(car.get('lot') or car.get('vin') or '')
-            if key.endswith(':') or key in seen or key in pending or not match(car, settings):
+            lot = car.get('lot_number')
+            identifier = lot or car.get('vin')
+            if not identifier or not eligible(car, settings):
                 continue
-            pending.add(key)
-            url = str(car.get('url', ''))
-            if not url.startswith('https://'):
+            key = f'{platform}:{identifier}'
+            if key in SEEN:
+                continue
+            pricing = car.get('pricing') or {}
+            price = pricing.get('buy_now_usd')
+            if price is None:
+                price = pricing.get('current_bid_usd')
+            url = car.get('url') or car.get('auction_url') or ''
+            if not str(url).startswith('https://'):
                 url = 'Nuoroda nepateikta'
-            message = (
-                f"🚗 {profile.get('name', 'Paieška')}: {car.get('year', '?')} {car.get('make', '')} {car.get('model', '')}\n"
-                f"{car.get('auction', '')} · Lot {car.get('lot', '?')} · {car.get('price', '?')} USD · "
-                f"{car.get('miles', '?')} mi · {car.get('cylinders', '?')} cilindrai\n{url}"
-            )
-            new.append((key, message))
-    for key, message in new:
-        notify(message)
-        seen.add(key)
-        STATE.write_text(json.dumps(sorted(seen), ensure_ascii=False, indent=2), encoding='utf-8')
-    print(f'Patikrinta automobilių: {len(cars)}. Nauji pranešimai: {len(new)}.')
+            message = (f"🚗 {car.get('year', '?')} {car.get('make', '')} {car.get('model', '')}\n"
+                       f"{platform.upper()} · Lot {lot or '?'} · {price} USD · "
+                       f"{(car.get('odometer') or {}).get('mi', '?')} mi\n{url}")
+            notify(message)
+            SEEN.add(key)
+            STATE.write_text(json.dumps(sorted(SEEN), indent=2), encoding='utf-8')
+            sent += 1
+    print(f'Markė: {make}. Patikrinta: {checked}. Išsiųsta: {sent}.')
+    print('Pastaba: tik pirmieji 20 kiekvieno aukciono įrašų; ne visa pasiūla.')
 
 
 if __name__ == '__main__':
