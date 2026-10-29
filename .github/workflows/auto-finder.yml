@@ -35,18 +35,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Restore state files
+      - name: Restore state
         run: |
           test -f saved-state/quota.json
+          test -f saved-state/seen.json
           cp saved-state/quota.json quota.json
+          cp saved-state/seen.json seen.json
 
-          if [ -f saved-state/seen.json ]; then
-            cp saved-state/seen.json seen.json
-          else
-            echo '[]' > seen.json
-          fi
-
-      - name: Run USA Auto Finder
+      - name: Run PalmImport
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -60,6 +56,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -f ../quota.json ] || [ ! -f ../seen.json ]; then
+            echo "State files missing; nothing to save"
+            exit 1
+          fi
+
           cp ../quota.json quota.json
           cp ../seen.json seen.json
 
