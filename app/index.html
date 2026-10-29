@@ -1,1 +1,221 @@
-HTML
+
+<!DOCTYPE html>
+<html lang="lt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#10141c">
+<title>PalmImport</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#10141c;color:#f3f5f9;
+font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif}
+header{padding:26px 20px 18px;background:#171d28}
+.logo{font-size:26px;font-weight:800;letter-spacing:-1px}
+.logo span{color:#ffad43}
+.subtitle{color:#9ba7b9;font-size:13px;margin-top:5px}
+main{max-width:600px;margin:auto;padding:20px}
+.card{background:#1a2230;border:1px solid #303b4c;
+border-radius:18px;padding:19px;margin-bottom:18px}
+h2{font-size:18px;margin:0 0 18px}
+label{display:block;color:#b8c3d2;font-size:13px;
+margin:14px 0 7px}
+input,select{width:100%;background:#111722;color:white;
+border:1px solid #394558;border-radius:10px;
+padding:13px;font-size:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.toggle{display:flex;align-items:center;
+justify-content:space-between;margin:18px 0}
+.toggle input{width:22px;height:22px;accent-color:#ffad43}
+button{width:100%;background:#ffad43;color:#111722;
+font-weight:750;border:0;border-radius:12px;
+padding:15px;font-size:16px;margin-top:12px}
+.secondary{background:#303b4c;color:white}
+.small{font-size:12px;color:#9ba7b9;line-height:1.5}
+.saved{padding:12px;background:#111722;
+border-radius:10px;margin-top:10px;line-height:1.6}
+.badge{display:inline-block;background:#304633;
+color:#a8e6b1;padding:5px 9px;border-radius:20px;
+font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+
+<header>
+<div class="logo">Palm<span>Import</span></div>
+<div class="subtitle">USA Vehicle Auction Finder</div>
+<span class="badge">● Search manager</span>
+</header>
+
+<main>
+
+<div class="card">
+<h2>Automobilių paieška</h2>
+
+<label>Markė</label>
+<select id="make" onchange="updateModels()">
+<option>Ford</option>
+<option>Audi</option>
+<option>BMW</option>
+<option>Jeep</option>
+<option>Dodge</option>
+<option>Chevrolet</option>
+<option>Tesla</option>
+</select>
+
+<label>Modelis</label>
+<select id="model"></select>
+
+<div class="grid">
+<div>
+<label>Metai nuo</label>
+<input id="yearMin" type="number" value="2015">
+</div>
+<div>
+<label>Metai iki</label>
+<input id="yearMax" type="number" value="2026">
+</div>
+</div>
+
+<div class="grid">
+<div>
+<label>Kaina nuo ($)</label>
+<input id="priceMin" type="number" value="0">
+</div>
+<div>
+<label>Kaina iki ($)</label>
+<input id="priceMax" type="number" value="15000">
+</div>
+</div>
+
+<div class="grid">
+<div>
+<label>Rida nuo (mi)</label>
+<input id="milesMin" type="number" value="0">
+</div>
+<div>
+<label>Rida iki (mi)</label>
+<input id="milesMax" type="number" value="150000">
+</div>
+</div>
+
+<label>Aukcionas</label>
+<select id="auction">
+<option value="both">Copart + IAA</option>
+<option value="copart">Copart</option>
+<option value="iaai">IAA</option>
+</select>
+
+<div class="toggle">
+<span>Run & Drive</span>
+<input id="run" type="checkbox" checked>
+</div>
+
+<div class="toggle">
+<span>Raktai privalomi</span>
+<input id="keys" type="checkbox" checked>
+</div>
+
+<button onclick="saveSearch()">Išsaugoti paiešką</button>
+<p class="small">Paieškos kol kas išsaugomos tik šiame telefone.
+Automatinis GitHub paieškos variklis dar neprijungtas.</p>
+</div>
+
+<div class="card">
+<h2>Išsaugotos paieškos</h2>
+<div id="saved"></div>
+<button class="secondary" onclick="clearSearches()">
+Ištrinti visas paieškas
+</button>
+</div>
+
+<div class="card">
+<h2>Aukcionų rezultatai</h2>
+<p class="small">Čia rodysime Copart ir IAA automobilius,
+kai prijungsime saugų duomenų šaltinį.</p>
+</div>
+
+</main>
+
+<script>
+const models={
+Ford:["Visi modeliai","Mustang","F-150","Explorer","Bronco"],
+Audi:["Visi modeliai","A4","A5","A6","Q5","Q7"],
+BMW:["Visi modeliai","3 Series","5 Series","X3","X5"],
+Jeep:["Visi modeliai","Wrangler","Grand Cherokee","Gladiator"],
+Dodge:["Visi modeliai","Challenger","Charger","Durango"],
+Chevrolet:["Corvette"],
+Tesla:["Visi modeliai","Model 3","Model S","Model X","Model Y"]
+};
+
+function updateModels(){
+const make=document.getElementById("make").value;
+document.getElementById("model").innerHTML=
+models[make].map(m=>`<option>${m}</option>`).join("");
+}
+
+function getSearches(){
+try{
+const data=JSON.parse(localStorage.getItem("palmSearches")||"[]");
+return Array.isArray(data)?data:[];
+}catch{return []}
+}
+
+function saveSearch(){
+const ids=["make","model","yearMin","yearMax",
+"priceMin","priceMax","milesMin","milesMax","auction"];
+const s={};
+ids.forEach(id=>s[id]=document.getElementById(id).value);
+s.run=document.getElementById("run").checked;
+s.keys=document.getElementById("keys").checked;
+
+if(Number(s.yearMin)>Number(s.yearMax)||
+Number(s.priceMin)>Number(s.priceMax)||
+Number(s.milesMin)>Number(s.milesMax)){
+alert("Patikrink intervalus: nuo negali būti daugiau nei iki.");
+return;
+}
+
+const list=getSearches();
+list.push(s);
+localStorage.setItem("palmSearches",JSON.stringify(list));
+renderSearches();
+alert("Paieška išsaugota telefone!");
+}
+
+function clearSearches(){
+if(confirm("Ištrinti visas išsaugotas paieškas?")){
+localStorage.removeItem("palmSearches");
+renderSearches();
+}
+}
+
+function renderSearches(){
+const el=document.getElementById("saved");
+const list=getSearches();
+el.replaceChildren();
+
+if(!list.length){
+const p=document.createElement("p");
+p.className="small";
+p.textContent="Dar nėra išsaugotų paieškų.";
+el.appendChild(p);
+return;
+}
+
+list.forEach(s=>{
+const div=document.createElement("div");
+div.className="saved";
+div.textContent=`${s.make} ${s.model} · ${s.yearMin}–${s.yearMax}
+ · $${s.priceMin}–$${s.priceMax}
+ · ${s.auction}`;
+el.appendChild(div);
+});
+}
+
+updateModels();
+renderSearches();
+</script>
+</body>
+</html>
+
