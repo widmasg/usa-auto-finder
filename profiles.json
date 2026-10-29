@@ -2,7 +2,45 @@
 {
   "profiles": [
     {
-      "name": "USA Auto Finder",
+      "name": "Ford Mustang",
+      "settings": {
+        "brands": ["Ford"],
+        "modelByMake": {
+          "Ford": "Mustang"
+        },
+        "year": 2018,
+        "yearMax": 2026,
+        "priceMin": 0,
+        "price": 15000,
+        "milesMin": 0,
+        "miles": 150000,
+        "auction": "",
+        "cylFilter": "",
+        "requireRunDrive": true,
+        "requireKeys": true
+      }
+    },
+    {
+      "name": "Jeep Wrangler",
+      "settings": {
+        "brands": ["Jeep"],
+        "modelByMake": {
+          "Jeep": "Wrangler"
+        },
+        "year": 2015,
+        "yearMax": 2026,
+        "priceMin": 0,
+        "price": 15000,
+        "milesMin": 0,
+        "miles": 150000,
+        "auction": "",
+        "cylFilter": "",
+        "requireRunDrive": true,
+        "requireKeys": true
+      }
+    },
+    {
+      "name": "Visos markes",
       "settings": {
         "brands": [
           "Ford",
@@ -25,8 +63,7 @@
         "auction": "",
         "cylFilter": "",
         "requireRunDrive": true,
-        "requireKeys": true,
-        "requireAirbags": false
+        "requireKeys": true
       }
     }
   ]
